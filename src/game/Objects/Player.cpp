@@ -2407,19 +2407,10 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
         ScheduledTeleportData* data = new ScheduledTeleportData(mapid, x, y, z, orientation, options, recover);
 
         sMapMgr.ScheduleFarTeleport(this, data);
-        // if there is no map create it
+        // if there is no map schedule creation
         if (!map)
         {
-            Map* map = sMapMgr.CreateMap(mapid, this);
-            if (mEntry->IsDungeon())
-            {
-                DungeonPersistentState* pSave = GetBoundInstanceSaveForSelfOrGroup(mEntry->id);
-                if (!pSave)
-                {
-                    DungeonMap* pMap = dynamic_cast<DungeonMap*>(map);
-                    pMap->BindPlayerOrGroupOnEnter(this);
-                }
-            }
+            sMapMgr.ScheduleNewInstanceForPlayer(mapid, this);
         }
     }
     return true;

@@ -233,6 +233,44 @@ void MapManager::DeleteInstance(uint32 mapid, uint32 instanceId)
     }
 }
 
+void MapManager::ScheduleNewInstanceForPlayer(uint32 mapId, Player* player)
+{
+    auto&& iter = m_scheduledNewInstances.find(ScheduledInstance(mapId, player)); //finds by hash
+    if (iter == m_scheduledNewInstances.end())
+    {
+        auto&& asyncCreateMapForPlayer = [mapId, player, this]() {
+            Map* map = CreateMap(mapId, player);
+            if (map->IsDungeon())
+            {
+                DungeonMap* pMap = dynamic_cast<DungeonMap*>(map);
+                pMap->BindPlayerOrGroupOnEnter(player);
+            }
+            sLog.Out(LOG_BASIC, LOG_LVL_DEBUG, "Loaded map %d for player %d", mapId, player->GetGUID());
+        };
+        auto&& job = std::async(std::launch::async, asyncCreateMapForPlayer).share();
+        std::lock_guard<std::mutex> guard(m_scheduledNewInstancesLock);
+        m_scheduledNewInstances.emplace(mapId, player, job);
+        sLog.Out(LOG_BASIC, LOG_LVL_DEBUG, "Map load scheduled %d for player %d", mapId, player->GetGUID());
+    }
+}
+
+void MapManager::CancelInstanceCreationForPlayer(Player* player)
+{
+    WorldLocation const& dest = player->GetTeleportDest();
+    if (!player->IsBeingTeleportedFar())
+    {
+        return;
+    }
+
+    uint32 mapId = dest.mapId;
+    std::lock_guard<std::mutex> guard(m_scheduledNewInstancesLock);
+    auto&& iter = m_scheduledNewInstances.find(ScheduledInstance(mapId, player));
+    if (iter != m_scheduledNewInstances.end())
+    {
+        m_scheduledNewInstances.erase(iter);
+    }
+}
+
 void MapManager::Update(uint32 diff)
 {
     i_timer.Update(diff);
@@ -822,13 +860,22 @@ void MapManager::ScheduleFarTeleport(Player* player, ScheduledTeleportData* data
 // Execute all delayed teleports at the end of a map update
 void MapManager::ExecuteDelayedPlayerTeleports()
 {
-    ScheduledTeleportMap::iterator iter;
-    for (iter = m_scheduledFarTeleports.begin(); iter != m_scheduledFarTeleports.end(); ++iter)
+    ScheduledTeleportMap::iterator iter = m_scheduledFarTeleports.begin();
+    while (iter != m_scheduledFarTeleports.end())
     {
-        ExecuteSingleDelayedTeleport(iter);
+        std::unique_lock<std::mutex> mapGuard(m_scheduledNewInstancesLock);
+        auto&& instanceIter = m_scheduledNewInstances.find(ScheduledInstance(iter->second->targetMapId, iter->first));
+        //if map is scheduled check if it's ready, if not scheduled that means it's already loaded
+        if (instanceIter == m_scheduledNewInstances.end() || instanceIter->job.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready)
+        {
+            ExecuteSingleDelayedTeleport(iter);
+            if (instanceIter != m_scheduledNewInstances.end())
+                m_scheduledNewInstances.erase(instanceIter);
+            m_scheduledFarTeleports.erase(iter);
+            iter = m_scheduledFarTeleports.begin();
+        } else
+            iter++; 
     }
-
-    m_scheduledFarTeleports.clear();
 }
 
 // Execute a single delayed teleport for the given player (if there are any). It should
