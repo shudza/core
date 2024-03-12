@@ -2395,19 +2395,24 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
         uint32 instanceId = 0;
         if (state)
             instanceId = state->GetInstanceId();
-        if (mapid <= 1)
+        else if (mEntry->IsBattleGround() && InBattleGround())
+            instanceId = GetBattleGroundId();
+        else if (mapid <= 1)
             instanceId = sMapMgr.GetContinentInstanceId(mapid, x, y);
         Map* map = sMapMgr.FindMap(mapid, instanceId);
         if (map && !map->CanEnter(this))
             return false;
 
+        //battlegrounds should always be loaded already by BattleGroundMgr
+        if (mEntry->IsBattleGround())
+            ASSERT(map);
         // Far teleport to another map. We can't do this right now since it means
         // we need to remove from this map mid-update. Instead, schedule it for
         // after updates are complete
         ScheduledTeleportData* data = new ScheduledTeleportData(mapid, x, y, z, orientation, options, recover);
 
         sMapMgr.ScheduleFarTeleport(this, data);
-        // if there is no map schedule creation
+        // if there is no map, schedule creation
         if (!map)
         {
             sMapMgr.ScheduleNewInstanceForPlayer(this, data);
