@@ -76,22 +76,17 @@ struct MapID
 };
 
 struct ScheduledInstance {
-    uint32 mapId;
+    ScheduledTeleportData* data;
     uint32 instanceId;
     Player* player;
     std::shared_future<void> job;
 
     bool operator==(ScheduledInstance const& c) const { return hash() == c.hash(); }
 
-    ScheduledInstance(uint32 m, Player* p): mapId(m), player(p){}
-    ScheduledInstance(uint32 m, Player* p, std::shared_future<void> job): mapId(m), player(p), job(job){}
-    ScheduledInstance(uint32 m, Player* p, uint32 i): mapId(m), player(p), instanceId(i){}
+    ScheduledInstance(ScheduledTeleportData* d, Player* p): data(d), player(p){}
+    ScheduledInstance(ScheduledTeleportData* d, Player* p, std::shared_future<void> job): data(d), player(p), job(job){}
 
-    std::size_t hash() const
-    {
-        uint32 key = player != nullptr ? player->GetGUID() : instanceId;
-        return mapId * 100000 + key;
-    }
+    std::size_t hash() const;
 };
 
 template<> struct std::hash<ScheduledInstance>
@@ -122,7 +117,7 @@ class MapManager : public MaNGOS::Singleton<MapManager, MaNGOS::ClassLevelLockab
         Map* CreateTestMap(uint32 mapid, bool instanced, float posX, float posY);
         void DeleteTestMap(Map* map);
         Map* FindMap(uint32 mapid, uint32 instanceId = 0) const;
-        void ScheduleNewInstanceForPlayer(uint32 mapId, Player* player);
+        void ScheduleNewInstanceForPlayer(Player* player, ScheduledTeleportData* data);
         void CancelInstanceCreationForPlayer(Player* player);
 
         void UpdateGridState(grid_state_t state, Map& map, NGridType& ngrid, GridInfo& ginfo, uint32 const& x, uint32 const& y, uint32 const& t_diff);

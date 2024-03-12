@@ -233,41 +233,53 @@ void MapManager::DeleteInstance(uint32 mapid, uint32 instanceId)
     }
 }
 
-void MapManager::ScheduleNewInstanceForPlayer(uint32 mapId, Player* player)
+void MapManager::ScheduleNewInstanceForPlayer(Player* player, ScheduledTeleportData* data)
 {
-    auto&& iter = m_scheduledNewInstances.find(ScheduledInstance(mapId, player)); //finds by hash
+    auto&& iter = m_scheduledNewInstances.find(ScheduledInstance(data, player)); //finds by hash
     if (iter == m_scheduledNewInstances.end())
     {
-        auto&& asyncCreateMapForPlayer = [mapId, player, this]() {
-            Map* map = CreateMap(mapId, player);
+        auto&& asyncCreateMapForPlayer = [data, player, this]() {
+            if (data->targetMapId <= 1)
+            {
+                //needed when Continents.Instanciate = 1
+                player->SetLocationInstanceId(GetContinentInstanceId(data->targetMapId, data->x, data->y));
+            }
+            Map* map = CreateMap(data->targetMapId, player);
             if (map->IsDungeon())
             {
                 DungeonMap* pMap = dynamic_cast<DungeonMap*>(map);
                 pMap->BindPlayerOrGroupOnEnter(player);
             }
-            sLog.Out(LOG_BASIC, LOG_LVL_DEBUG, "Loaded map %d for player %d", mapId, player->GetGUID());
+            sLog.Out(LOG_BASIC, LOG_LVL_DEBUG, "Loaded map %d %d for player %d", data->targetMapId, map->GetInstanceId(), player->GetGUID());
         };
         auto&& job = std::async(std::launch::async, asyncCreateMapForPlayer).share();
         std::lock_guard<std::mutex> guard(m_scheduledNewInstancesLock);
-        m_scheduledNewInstances.emplace(mapId, player, job);
-        sLog.Out(LOG_BASIC, LOG_LVL_DEBUG, "Map load scheduled %d for player %d", mapId, player->GetGUID());
+        m_scheduledNewInstances.emplace(data, player, job);
+        sLog.Out(LOG_BASIC, LOG_LVL_DEBUG, "Map load scheduled %d for player %d", data->targetMapId, player->GetGUID());
+    } 
+    else if (data->targetMapId <= 1)
+    {
+        //if this is a continent someone already triggered the loading
+        //insert schedule which waits for the same job
+        std::lock_guard<std::mutex> guard(m_scheduledNewInstancesLock);
+        m_scheduledNewInstances.emplace(data, player, iter->job);
+        sLog.Out(LOG_BASIC, LOG_LVL_DEBUG, "Map load scheduled %d for player %d (already loading)", data->targetMapId, player->GetGUID());
     }
 }
 
 void MapManager::CancelInstanceCreationForPlayer(Player* player)
 {
-    WorldLocation const& dest = player->GetTeleportDest();
-    if (!player->IsBeingTeleportedFar())
-    {
-        return;
-    }
-
-    uint32 mapId = dest.mapId;
     std::lock_guard<std::mutex> guard(m_scheduledNewInstancesLock);
-    auto&& iter = m_scheduledNewInstances.find(ScheduledInstance(mapId, player));
-    if (iter != m_scheduledNewInstances.end())
+    auto&& iter = m_scheduledNewInstances.begin();
+    while (iter != m_scheduledNewInstances.end())
     {
-        m_scheduledNewInstances.erase(iter);
+        if (iter->player == player)
+        {
+            m_scheduledNewInstances.erase(iter);
+            iter = m_scheduledNewInstances.begin();
+        }
+        else
+            iter++;
     }
 }
 
@@ -864,13 +876,15 @@ void MapManager::ExecuteDelayedPlayerTeleports()
     while (iter != m_scheduledFarTeleports.end())
     {
         std::unique_lock<std::mutex> mapGuard(m_scheduledNewInstancesLock);
-        auto&& instanceIter = m_scheduledNewInstances.find(ScheduledInstance(iter->second->targetMapId, iter->first));
+        auto&& instanceIter = m_scheduledNewInstances.find(ScheduledInstance(iter->second, iter->first));
         //if map is scheduled check if it's ready, if not scheduled that means it's already loaded
         if (instanceIter == m_scheduledNewInstances.end() || instanceIter->job.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready)
         {
             ExecuteSingleDelayedTeleport(iter);
             if (instanceIter != m_scheduledNewInstances.end())
                 m_scheduledNewInstances.erase(instanceIter);
+            
+            delete iter->second; // don't leak tele data
             m_scheduledFarTeleports.erase(iter);
             iter = m_scheduledFarTeleports.begin();
         } else
@@ -890,6 +904,7 @@ void MapManager::ExecuteSingleDelayedTeleport(Player* player)
     {
         ExecuteSingleDelayedTeleport(iter);
 
+        delete iter->second; // don't leak tele data
         m_scheduledFarTeleports.erase(iter);
     }
 }
@@ -901,8 +916,6 @@ void MapManager::ExecuteSingleDelayedTeleport(ScheduledTeleportMap::iterator ite
         iter->first->SetSemaphoreTeleportFar(false);
 
     iter->first->SetPendingFarTeleport(false);
-
-    delete iter->second; // don't leak tele data
 }
 
 void MapManager::CancelDelayedPlayerTeleport(Player* player)
@@ -966,4 +979,20 @@ bool MapManager::waitContinentUpdateFinishedUntil(std::chrono::high_resolution_c
 {
     std::unique_lock<std::mutex> lock(m_continentMutex);
     return m_continentCV.wait_until(lock,time,std::bind(&MapManager::IsContinentUpdateFinished,this));
+}
+
+std::size_t ScheduledInstance::hash() const
+{
+    uint32 key;
+    uint32 mapId = data->targetMapId;
+    if (mapId <= 1)
+    {
+        //continents should be common regardless of which player loads it first
+        key = sMapMgr.GetContinentInstanceId(mapId, data->x, data->y);
+    } else
+    {
+        //instance id hasn't been assigned yet, so use guid as key
+        key = player->GetGUID();
+    }
+    return ((size_t)mapId << 16) | (size_t)key;
 }

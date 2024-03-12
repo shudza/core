@@ -2410,7 +2410,7 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
         // if there is no map schedule creation
         if (!map)
         {
-            sMapMgr.ScheduleNewInstanceForPlayer(mapid, this);
+            sMapMgr.ScheduleNewInstanceForPlayer(this, data);
         }
     }
     return true;
@@ -2435,7 +2435,9 @@ bool Player::ExecuteTeleportFar(ScheduledTeleportData* data)
         instanceId = sMapMgr.GetContinentInstanceId(mapid, data->x, data->y);
     Map* map = sMapMgr.FindMap(mapid, instanceId);
 
-    //map should always exist since it's created in most recent Update
+    sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "teleporting to map %d %d", mapid, instanceId );
+
+    //we shouldn't be here if there is no map
     MANGOS_ASSERT(map);
 
     if (map->CanEnter(this))
