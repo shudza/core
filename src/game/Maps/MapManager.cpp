@@ -233,71 +233,11 @@ void MapManager::DeleteInstance(uint32 mapid, uint32 instanceId)
     }
 }
 
-void MapManager::ScheduleNewWorldOnFarTeleport(Player* pPlayer)
-{
-    WorldLocation const& dest = pPlayer->GetTeleportDest();
-    MapEntry const* pMapEntry = sMapStorage.LookupEntry<MapEntry>(dest.mapId);
-    MANGOS_ASSERT(pMapEntry);
-
-    if (pMapEntry->IsDungeon())
-    {
-        DungeonPersistentState* pSave = pPlayer->GetBoundInstanceSaveForSelfOrGroup(pMapEntry->id);
-        if (!pSave || !FindMap(pMapEntry->id, pSave->GetInstanceId()))
-        {
-            m_scheduledNewInstancesForPlayers.insert(pPlayer);
-            return;
-        }
-    }
-
-    // map already created
-    pPlayer->SendNewWorld();
-}
-
-void MapManager::CreateNewInstancesForPlayers()
-{
-    do
-    {
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        std::unordered_set<Player*> players;
-        std::swap(players, m_scheduledNewInstancesForPlayers);
-
-        for (auto const& player : players)
-        {
-            WorldLocation const& dest = player->GetTeleportDest();
-            if (!player->IsBeingTeleportedFar())
-            {
-                sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "Scheduled instance creation for map %u for player %u but he is no longer being teleported!", dest.mapId, player->GetGUIDLow());
-                continue;
-            }
-
-            MapEntry const* pMapEntry = sMapStorage.LookupEntry<MapEntry>(dest.mapId);
-            MANGOS_ASSERT(pMapEntry->IsDungeon());
-
-            DungeonMap* pMap = static_cast<DungeonMap*>(CreateInstance(dest.mapId, player));
-            if (pMap->CanEnter(player))
-            {
-                pMap->BindPlayerOrGroupOnEnter(player);
-                player->SendNewWorld();
-            } 
-            else
-            {
-                WorldLocation oldLoc;
-                player->GetPosition(oldLoc);
-                player->HandleReturnOnTeleportFail(oldLoc);
-            }
-        } 
-    } while (asyncMapUpdating);
-}
-
 void MapManager::Update(uint32 diff)
 {
     i_timer.Update(diff);
     if (!i_timer.Passed())
         return;
-
-    // Execute any teleports scheduled in the main thread prior to map update
-    // eg. area triggers, world port acks
-    ExecuteDelayedPlayerTeleports();
 
     uint32 mapsDiff = (uint32)i_timer.GetCurrent();
     asyncMapUpdating = true;
@@ -337,8 +277,6 @@ void MapManager::Update(uint32 diff)
         }
     }
 
-    std::thread instanceCreationThread = std::thread(&MapManager::CreateNewInstancesForPlayers, this);
-    
     i_maxContinentThread = continentsIdx;
     i_continentUpdateFinished.store(0);
 
@@ -367,9 +305,6 @@ void MapManager::Update(uint32 diff)
 
     SwitchPlayersInstances();
     asyncMapUpdating = false;
-
-    if (instanceCreationThread.joinable())
-        instanceCreationThread.join();
 
     // Execute far teleports after all map updates have finished
     ExecuteDelayedPlayerTeleports();
@@ -879,19 +814,9 @@ uint32 MapManager::GetContinentInstanceId(uint32 mapId, float x, float y, bool* 
 
 void MapManager::ScheduleFarTeleport(Player* player, ScheduledTeleportData* data)
 {
-    // If we're not in the middle of an async update, it's safe to execute the
-    // teleport immediately.
-    if (!asyncMapUpdating)
-    {
-        player->ExecuteTeleportFar(data);
-        delete data;
-    }
-    else
-    {
-        std::unique_lock<std::mutex> guard(m_scheduledFarTeleportsLock);
-        player->SetPendingFarTeleport(true);
-        m_scheduledFarTeleports[player] = data;
-    }
+    std::unique_lock<std::mutex> guard(m_scheduledFarTeleportsLock);
+    player->SetPendingFarTeleport(true);
+    m_scheduledFarTeleports[player] = data;
 }
 
 // Execute all delayed teleports at the end of a map update

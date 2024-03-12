@@ -2407,6 +2407,20 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
         ScheduledTeleportData* data = new ScheduledTeleportData(mapid, x, y, z, orientation, options, recover);
 
         sMapMgr.ScheduleFarTeleport(this, data);
+        // if there is no map create it
+        if (!map)
+        {
+            Map* map = sMapMgr.CreateMap(mapid, this);
+            if (mEntry->IsDungeon())
+            {
+                DungeonPersistentState* pSave = GetBoundInstanceSaveForSelfOrGroup(mEntry->id);
+                if (!pSave)
+                {
+                    DungeonMap* pMap = dynamic_cast<DungeonMap*>(map);
+                    pMap->BindPlayerOrGroupOnEnter(this);
+                }
+            }
+        }
     }
     return true;
 }
@@ -2422,8 +2436,6 @@ bool Player::ExecuteTeleportFar(ScheduledTeleportData* data)
     if (!sMapMgr.CanPlayerEnter(mapid, this))
         return false;
 
-    // If the map is not created, assume it is possible to enter it.
-    // It will be created in the WorldPortAck.
     DungeonPersistentState* state = GetBoundInstanceSaveForSelfOrGroup(mapid);
     uint32 instanceId = 0;
     if (state)
@@ -2431,7 +2443,11 @@ bool Player::ExecuteTeleportFar(ScheduledTeleportData* data)
     if (mapid <= 1)
         instanceId = sMapMgr.GetContinentInstanceId(mapid, data->x, data->y);
     Map* map = sMapMgr.FindMap(mapid, instanceId);
-    if (!map || map->CanEnter(this))
+
+    //map should always exist since it's created in most recent Update
+    MANGOS_ASSERT(map);
+
+    if (map->CanEnter(this))
     {
         //lets reset near teleport flag if it wasn't reset during chained teleports
         SetSemaphoreTeleportNear(false);
@@ -2514,6 +2530,7 @@ bool Player::ExecuteTeleportFar(ScheduledTeleportData* data)
         // code for finish transfer to new map called in WorldSession::HandleMoveWorldportAckOpcode at client packet
         SetSemaphoreTeleportFar(true);
 
+        // No need to send or schedule anything on logout
         if (!GetSession()->PlayerLogout())
         {
             if (data->recover)
@@ -2521,9 +2538,7 @@ bool Player::ExecuteTeleportFar(ScheduledTeleportData* data)
             else
                 m_teleportRecover = std::bind(&Player::SendNewWorld, this);
 
-            // No need to send or schedule anything on logout
-            if (!GetSession()->PlayerLogout())
-                sMapMgr.ScheduleNewWorldOnFarTeleport(this);
+            SendNewWorld();
         }
 
         return true;
