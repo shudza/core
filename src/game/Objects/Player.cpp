@@ -2432,15 +2432,16 @@ bool Player::ExecuteTeleportFar(ScheduledTeleportData* data)
     if (!sMapMgr.CanPlayerEnter(mapid, this))
         return false;
 
+    MapEntry const* mEntry = sMapStorage.LookupEntry<MapEntry>(mapid);
     DungeonPersistentState* state = GetBoundInstanceSaveForSelfOrGroup(mapid);
     uint32 instanceId = 0;
     if (state)
         instanceId = state->GetInstanceId();
-    if (mapid <= 1)
+    else if (mEntry->IsBattleGround() && InBattleGround())
+        instanceId = GetBattleGroundId();
+    else if (mapid <= 1)
         instanceId = sMapMgr.GetContinentInstanceId(mapid, data->x, data->y);
     Map* map = sMapMgr.FindMap(mapid, instanceId);
-
-    sLog.Out(LOG_BASIC, LOG_LVL_ERROR, "teleporting to map %d %d", mapid, instanceId );
 
     //we shouldn't be here if there is no map
     MANGOS_ASSERT(map);
