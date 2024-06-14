@@ -212,6 +212,7 @@ void UpdateData::Clear()
 #if SUPPORTED_CLIENT_BUILD > CLIENT_BUILD_1_7_1
 bool MovementData::CanAddPacket(WorldPacket const& data)
 {
+    std::lock_guard<std::mutex> lock(bufferLock);
     // Since packet size is stored with an uint8, packet size is limited for compressed packets
     if ((data.wpos() + 2) > 0xFF)
         return false;
@@ -224,6 +225,7 @@ bool MovementData::CanAddPacket(WorldPacket const& data)
 
 void MovementData::AddPacket(WorldPacket const& data)
 {
+    std::lock_guard<std::mutex> lock(bufferLock);
     ASSERT(data.wpos() + 2 <= 0xFF); // Max packet size to be stored on uint8. Client crash else.
     _buffer << uint8(data.wpos() + 2); // Packet + opcode size
     _buffer << uint16(data.GetOpcode());
@@ -232,6 +234,7 @@ void MovementData::AddPacket(WorldPacket const& data)
 
 bool MovementData::BuildPacket(WorldPacket& packet)
 {
+    std::lock_guard<std::mutex> lock(bufferLock);
     MANGOS_ASSERT(packet.empty()); // We want a clean packet !
 
     size_t pSize = _buffer.wpos();                              // use real used data size

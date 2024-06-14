@@ -104,6 +104,7 @@ class MovementData
         bool HasData() const { return _buffer.wpos() != 0; }
         void ClearBuffer() { _buffer.clear(); }
     protected:
+        std::mutex  bufferLock;
         ByteBuffer _buffer;
 };
 #endif
